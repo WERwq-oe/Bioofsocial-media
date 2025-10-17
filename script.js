@@ -3,6 +3,10 @@ let currentTheme = 'light';
 let generatedReport = '';
 let generatedQuiz = null;
 
+// Gemini AI Configuration
+const GEMINI_API_KEY = 'AIzaSyAOCRjlOumCIXF_0idUzvYCZp4-80Y_GOw';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent';
+
 // Initialize the app
 document.addEventListener('DOMContentLoaded', function() {
     initializeApp();
@@ -77,6 +81,123 @@ function loadHandwrittenFont() {
     document.head.appendChild(link);
 }
 
+// Helper function to create prompts
+function createReportPrompt(data) {
+    const lengthGuide = {
+        short: '500-800 words',
+        medium: '1000-1500 words',
+        long: '2000+ words'
+    };
+    
+    const formatInstructions = data.formatting.includes('bullet') ? 'Include bullet points where appropriate. ' : '';
+    const numberedInstructions = data.formatting.includes('numbered') ? 'Use numbered lists for sequential information. ' : '';
+    const tableInstructions = data.formatting.includes('tables') ? 'Include tables for data comparison where relevant. ' : '';
+    const headingInstructions = data.formatting.includes('headings') ? 'Use clear section headings (## for main sections, ### for subsections). ' : '';
+    
+    return `Create a comprehensive report about "${data.topic}" that is ${lengthGuide[data.length]}.
+
+Format Requirements:
+- Use markdown formatting for structure
+- ${headingInstructions}
+- Use **bold** for important terms and concepts
+- Use *italics* for emphasis
+- Use __underline__ for key definitions
+- ${formatInstructions}
+- ${numberedInstructions}
+- ${tableInstructions}
+- Include an introduction, main content sections, and conclusion
+- Make it informative, well-structured, and engaging
+- Ensure proper paragraph breaks for readability
+
+The report should be educational and factual, covering key aspects of the topic in depth.`;
+}
+
+function createQuizPrompt(data) {
+    const totalQuestions = data.numQuestions;
+    let questionsPerType = {};
+    
+    // Calculate questions per type based on selection
+    if (data.types.length === 1) {
+        questionsPerType[data.types[0]] = totalQuestions;
+    } else if (data.types.length === 2) {
+        questionsPerType[data.types[0]] = Math.ceil(totalQuestions * 0.6);
+        questionsPerType[data.types[1]] = totalQuestions - questionsPerType[data.types[0]];
+    } else if (data.types.length === 3) {
+        questionsPerType[data.types[0]] = Math.ceil(totalQuestions * 0.5);
+        questionsPerType[data.types[1]] = Math.ceil(totalQuestions * 0.3);
+        questionsPerType[data.types[2]] = totalQuestions - questionsPerType[data.types[0]] - questionsPerType[data.types[1]];
+    }
+    
+    const typeInstructions = data.types.map(type => {
+        const count = questionsPerType[type];
+        switch (type) {
+            case 'mcq': return `${count} multiple choice questions with 4 options each`;
+            case 'oneword': return `${count} one-word answer questions`;
+            case 'flashcard': return `${count} flashcard-style Q&A pairs`;
+            default: return '';
+        }
+    }).filter(Boolean).join(', ');
+
+    return `Create a ${data.difficulty} difficulty quiz about "${data.topic}" with exactly ${data.numQuestions} questions total.
+
+Include exactly: ${typeInstructions}
+
+IMPORTANT: Create questions in the exact order and quantities specified above. Do not exceed ${totalQuestions} total questions.
+
+Format the response as JSON with this structure:
+{
+    "topic": "${data.topic}",
+    "difficulty": "${data.difficulty}",
+    "questions": [
+        {
+            "type": "mcq",
+            "question": "Question text",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correctAnswer": 0
+        },
+        {
+            "type": "oneword",
+            "question": "Question text",
+            "answer": "correct answer"
+        },
+        {
+            "type": "flashcard",
+            "question": "Question text",
+            "answer": "Answer text"
+        }
+    ]
+}
+
+Make questions engaging and educational, testing understanding rather than just memorization.`;
+}
+async function callGeminiAPI(prompt) {
+    try {
+        const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{
+                        text: prompt
+                    }]
+                }]
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`API Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data.candidates[0].content.parts[0].text;
+    } catch (error) {
+        console.error('Gemini API Error:', error);
+        throw new Error('Failed to generate content. Please try again.');
+    }
+}
+
 // Report Generation
 async function generateReport() {
     const topic = document.getElementById('reportTopic').value.trim();
@@ -93,34 +214,22 @@ async function generateReport() {
     showLoadingModal('report');
 
     try {
-        const reportData = {
+        const prompt = createReportPrompt({
             topic,
             length: reportLength,
             format: textFormat,
             formatting
-        };
-
-        const response = await fetch('/api/generate-report', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(reportData)
         });
 
-        if (!response.ok) {
-            throw new Error('Failed to generate report');
-        }
-
-        const result = await response.json();
-        generatedReport = result.content;
+        const content = await callGeminiAPI(prompt);
+        generatedReport = content;
         
         hideLoadingModal();
-        showReportPreview(result.content);
+        showReportPreview(content);
     } catch (error) {
         console.error('Error generating report:', error);
         hideLoadingModal();
-        alert('Failed to generate report. Please try again.');
+        alert('Failed to generate report. Please check your internet connection and try again.');
     }
 }
 
@@ -145,34 +254,27 @@ async function generateQuiz() {
     showLoadingModal('quiz');
 
     try {
-        const quizData = {
+        const prompt = createQuizPrompt({
             topic,
             types: quizTypes,
             numQuestions: parseInt(numQuestions),
             difficulty
-        };
-
-        const response = await fetch('/api/generate-quiz', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(quizData)
         });
 
-        if (!response.ok) {
-            throw new Error('Failed to generate quiz');
-        }
-
-        const result = await response.json();
-        generatedQuiz = result;
+        const content = await callGeminiAPI(prompt);
+        
+        // Clean and parse JSON response
+        let cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const quizData = JSON.parse(cleanContent);
+        
+        generatedQuiz = quizData;
         
         hideLoadingModal();
-        showQuizPreview(result);
+        showQuizPreview(quizData);
     } catch (error) {
         console.error('Error generating quiz:', error);
         hideLoadingModal();
-        alert('Failed to generate quiz. Please try again.');
+        alert('Failed to generate quiz. Please check your internet connection and try again.');
     }
 }
 
@@ -553,33 +655,89 @@ function showInteractiveQuiz(quiz) {
     modal.classList.add('active');
 }
 
-// Download Functions
+// Download Functions - Client-side implementation
 async function downloadReport(format) {
     if (!generatedReport) return;
     
     try {
-        const response = await fetch('/api/download-report', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                content: generatedReport,
-                format: format
-            })
-        });
-        
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `report.${format}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
+        if (format === 'pdf') {
+            // Create HTML content for PDF
+            const html = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {
+                            font-family: 'Arial', sans-serif;
+                            line-height: 1.6;
+                            color: #333;
+                            max-width: 800px;
+                            margin: 0 auto;
+                            padding: 25px 20px 40px 20px;
+                            position: relative;
+                        }
+                        .watermark {
+                            position: fixed;
+                            top: 5px;
+                            left: 5px;
+                            font-size: 8px;
+                            color: #000000;
+                            font-weight: 700;
+                            opacity: 0.3;
+                            z-index: 1000;
+                            font-family: Arial, sans-serif;
+                            letter-spacing: 0.5px;
+                        }
+                        h1, h2, h3 { color: #2c3e50; margin-top: 30px; margin-bottom: 15px; }
+                        h1 { font-size: 28px; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+                        h2 { font-size: 22px; border-bottom: 1px solid #bdc3c7; padding-bottom: 5px; }
+                        h3 { font-size: 18px; color: #34495e; }
+                        p { margin-bottom: 15px; text-align: justify; }
+                        ul, ol { margin: 15px 0; padding-left: 30px; }
+                        li { margin-bottom: 8px; }
+                        strong { color: #2c3e50; font-weight: 600; }
+                        em { color: #7f8c8d; font-style: italic; }
+                        u { text-decoration: underline; color: #e74c3c; }
+                        table { 
+                            width: 100%; 
+                            border-collapse: collapse; 
+                            margin: 20px 0; 
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        }
+                        th, td { 
+                            border: 1px solid #bdc3c7; 
+                            padding: 12px 8px; 
+                            text-align: left; 
+                            vertical-align: top;
+                        }
+                        th { 
+                            background-color: #ecf0f1; 
+                            font-weight: 600; 
+                            color: #2c3e50;
+                        }
+                        tr:nth-child(even) { background-color: #f8f9fa; }
+                        @media print { @page { margin: 1in; size: A4; } }
+                    </style>
+                </head>
+                <body>
+                    <div class="watermark">Th Logic</div>
+                    ${formatContentForHTML(generatedReport)}
+                </body>
+                </html>
+            `;
+            
+            // Create and download HTML file that can be printed to PDF
+            downloadAsFile(html, 'report.html', 'text/html');
+            alert('HTML file downloaded! Please open it and use your browser\'s "Print to PDF" feature to get a PDF.');
+            
+        } else if (format === 'docx') {
+            // For DOCX, we'll create a formatted text file that can be opened in Word
+            const textContent = convertMarkdownToText(generatedReport);
+            downloadAsFile(textContent, 'report.txt', 'text/plain');
+            alert('Text file downloaded! You can open this in Microsoft Word and save as DOCX.');
         }
+        
     } catch (error) {
         console.error('Error downloading report:', error);
         alert('Failed to download report. Please try again.');
@@ -590,29 +748,167 @@ async function downloadQuiz() {
     if (!generatedQuiz) return;
     
     try {
-        const response = await fetch('/api/download-quiz', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(generatedQuiz)
-        });
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        padding: 25px 40px 40px 40px; 
+                        line-height: 1.6; 
+                        position: relative;
+                    }
+                    .watermark {
+                        position: fixed;
+                        top: 5px;
+                        left: 5px;
+                        font-size: 8px;
+                        color: #000000;
+                        font-weight: 700;
+                        opacity: 0.3;
+                        z-index: 1000;
+                        font-family: Arial, sans-serif;
+                        letter-spacing: 0.5px;
+                    }
+                    .quiz-header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #333; padding-bottom: 20px; }
+                    .question { margin-bottom: 30px; page-break-inside: avoid; }
+                    .question-title { font-weight: bold; margin-bottom: 10px; font-size: 16px; }
+                    .options { margin-left: 20px; }
+                    .option { margin: 8px 0; }
+                    .answer-key { margin-top: 50px; page-break-before: always; }
+                    @media print { @page { margin: 1in; size: A4; } }
+                </style>
+            </head>
+            <body>
+                <div class="watermark">Th Logic</div>
+                ${generateQuizHTML(generatedQuiz)}
+            </body>
+            </html>
+        `;
         
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'quiz.pdf';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-        }
+        downloadAsFile(html, 'quiz.html', 'text/html');
+        alert('HTML file downloaded! Please open it and use your browser\'s "Print to PDF" feature to get a PDF.');
+        
     } catch (error) {
         console.error('Error downloading quiz:', error);
         alert('Failed to download quiz. Please try again.');
     }
+}
+
+// Helper functions for client-side downloads
+function downloadAsFile(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+}
+
+function formatContentForHTML(content) {
+    let formatted = content
+        .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+        .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+        .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/__(.*?)__/g, '<u>$1</u>')
+        .replace(/^\* (.*$)/gm, '<li>$1</li>')
+        .replace(/^(\d+)\. (.*$)/gm, '<li>$2</li>');
+    
+    // Handle tables
+    formatted = formatted.replace(/\|(.+)\|\n\|[-:\s\|]+\|\n((?:\|.+\|\n?)*)/g, (match, header, rows) => {
+        const headerCells = header.split('|').map(cell => cell.trim()).filter(cell => cell);
+        const tableRows = rows.trim().split('\n').map(row => 
+            row.split('|').map(cell => cell.trim()).filter(cell => cell)
+        );
+        
+        let tableHTML = '<table><thead><tr>';
+        headerCells.forEach(cell => {
+            tableHTML += `<th>${cell}</th>`;
+        });
+        tableHTML += '</tr></thead><tbody>';
+        
+        tableRows.forEach(row => {
+            if (row.length > 0) {
+                tableHTML += '<tr>';
+                row.forEach(cell => {
+                    tableHTML += `<td>${cell}</td>`;
+                });
+                tableHTML += '</tr>';
+            }
+        });
+        
+        tableHTML += '</tbody></table>';
+        return tableHTML;
+    });
+    
+    // Convert paragraphs
+    formatted = formatted
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/^(?![<\s])/gm, '<p>')
+        .replace(/(?<![>])$/gm, '</p>')
+        .replace(/(<li>.*?<\/li>\s*)+/g, '<ul>$&</ul>');
+    
+    return formatted;
+}
+
+function convertMarkdownToText(content) {
+    return content
+        .replace(/^# (.*$)/gm, '$1\n' + '='.repeat(50) + '\n')
+        .replace(/^## (.*$)/gm, '\n$1\n' + '-'.repeat(30) + '\n')
+        .replace(/^### (.*$)/gm, '\n$1\n')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/__(.*?)__/g, '$1')
+        .replace(/^\* /gm, '• ')
+        .replace(/^(\d+)\. /gm, '$1. ');
+}
+
+function generateQuizHTML(quizData) {
+    let html = `
+        <div class="quiz-header">
+            <h1>${quizData.topic}</h1>
+            <p>Difficulty: ${quizData.difficulty} | Questions: ${quizData.questions.length}</p>
+        </div>
+    `;
+    
+    quizData.questions.forEach((question, index) => {
+        html += `<div class="question">`;
+        html += `<div class="question-title">${index + 1}. ${question.question}</div>`;
+        
+        if (question.type === 'mcq') {
+            html += `<div class="options">`;
+            question.options.forEach((option, optIndex) => {
+                html += `<div class="option">○ ${option}</div>`;
+            });
+            html += `</div>`;
+        } else if (question.type === 'oneword') {
+            html += `<div class="answer-space">Answer: _________________</div>`;
+        }
+        
+        html += `</div>`;
+    });
+    
+    // Answer key
+    html += `<div class="answer-key">`;
+    html += `<h2>Answer Key</h2>`;
+    quizData.questions.forEach((question, index) => {
+        if (question.type === 'mcq') {
+            const correctOption = question.options[question.correctAnswer];
+            html += `<p>${index + 1}. ${correctOption}</p>`;
+        } else if (question.type === 'oneword') {
+            html += `<p>${index + 1}. ${question.answer}</p>`;
+        }
+    });
+    html += `</div>`;
+    
+    return html;
 }
 
 // Modal Functions

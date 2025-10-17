@@ -2,7 +2,7 @@
 node_modules/
 npm-debug.log*
 
-# Environment variables
+# Environment variables (keep this for security)
 .env
 
 # OS generated files
@@ -23,26 +23,18 @@ Thumbs.db
 # Logs
 *.log
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-
-# Dependency directories
-jspm_packages/
+# GitHub Pages build artifacts
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
 
 # Optional npm cache directory
 .npm
 
-# Optional REPL history
-.node_repl_history
-
-# Output of 'npm pack'
-*.tgz
-
 # Yarn Integrity file
 .yarn-integrity
+
+# Temporary files
+*.tmp
+*.temp
